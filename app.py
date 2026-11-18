@@ -138,7 +138,8 @@ if uploaded_files:
                 delta_ep = (epa - epc) * 1000.0 if (not np.isnan(epa) and not np.isnan(epc)) else np.nan
                 peak_ratio = abs(ipa / ipc) if (not np.isnan(ipa) and not np.isnan(ipc) and ipc != 0) else np.nan
 
-                loop_area = np.abs(np.np.trapezoid(i_raw, v_raw))
+                # Using np.trapezoid for full compatibility with NumPy 2.x
+                loop_area = np.abs(np.trapezoid(i_raw, v_raw))
                 cs_val = loop_area / (2.0 * electrode_mass_g * delta_V * v_rate)
 
                 peak_records.append({
