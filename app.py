@@ -16,7 +16,7 @@ st.set_page_config(
 st.title("⚡ Electrochemical Cyclic Voltammetry (CV) Modeling & Kinetics App")
 st.markdown(
     "Upload multi-scan-rate CV data files (`.csv`, `.txt`, `.xls`, `.xlsx`), along with optional "
-    "**XRD** and **FTIR** structural characterization files, to perform complete electrochemical "
+    "**XRD** (`.asc`, `.csv`, `.txt`, `.dat`) and **FTIR** structural characterization files, to perform complete electrochemical "
     "and structural analysis for journal submissions."
 )
 
@@ -45,22 +45,23 @@ uploaded_files = st.sidebar.file_uploader(
 
 st.sidebar.markdown("---")
 st.sidebar.header("3. Structural Characterization (Optional)")
-xrd_file = st.sidebar.file_uploader("Upload XRD Data (.csv, .txt, .dat, .xlsx)", type=["csv", "txt", "dat", "xlsx"])
-ftir_file = st.sidebar.file_uploader("Upload FTIR Data (.csv, .txt, .dat, .xlsx)", type=["csv", "txt", "dat", "xlsx"])
+xrd_file = st.sidebar.file_uploader("Upload XRD Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
+ftir_file = st.sidebar.file_uploader("Upload FTIR Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 
 def parse_uploaded_file(uploaded_file, skiprows=0):
-    """Reads CSV, TXT, XLS, or XLSX and extracts two numeric columns."""
+    """Reads CSV, TXT, ASC, DAT, XLS, or XLSX and extracts two numeric columns robustly."""
     name = uploaded_file.name.lower()
     if name.endswith((".xls", ".xlsx")):
         df = pd.read_excel(uploaded_file, skiprows=skiprows)
     else:
-        df = pd.read_csv(uploaded_file, sep=None, engine="python", skiprows=skiprows)
+        # Handles comma, tab, and whitespace-delimited files (.asc, .txt, .dat, .csv)
+        df = pd.read_csv(uploaded_file, sep=None, engine="python", skiprows=skiprows, comment="#")
     
     df = df.dropna(axis=1, how="all")
     numeric_cols = []
     for col in df.columns:
         converted = pd.to_numeric(df[col], errors="coerce")
-        if converted.notna().sum() > len(df) * 0.5:
+        if converted.notna().sum() > len(df) * 0.3:
             df[col] = converted
             numeric_cols.append(col)
             
@@ -81,7 +82,6 @@ if xrd_file is not None:
         xrd_file.seek(0)
         x_th, y_int = parse_uploaded_file(xrd_file)
         xrd_df = pd.DataFrame({"2Theta_deg": x_th, "Intensity_a.u.": y_int})
-        # Basic peak identification
         peaks, _ = find_peaks(y_int, prominence=(np.max(y_int) - np.min(y_int)) * 0.1)
         peak_2theta = x_th[peaks] if len(peaks) > 0 else np.array([])
         xrd_summary = f"Identified {len(peak_2theta)} major diffraction peaks at 2Theta: {np.round(peak_2theta, 2)} deg. Confirms crystalline phase purity."
@@ -329,7 +329,7 @@ if uploaded_files:
 - **Surface Functional Groups (FTIR):** {ftir_summary if ftir_file else "FTIR spectroscopy confirms the presence of active functional groups and metal-oxygen coordination bonds, enhancing electrolyte wetting and interfacial charge storage."}
 
 **2. Electrochemical Kinetics & Charge Storage Mechanism:**
-- The cyclic voltammetry analysis conducted across multiple scan rates ({scan_rates_mv[0]:.0f} to {scan_rates_mv[-1]:.0f} mV/s) within an operating potential window of $\Delta V = {delta_V:.2f}\text{{ V}}$ reveals a maximum specific capacitance of **{cs_values[0]:.2f} F/g** at {scan_rates_mv[0]:.0f} mV/s, with **{retention:.1f}%** retention at higher rates.
+- The cyclic voltammetry analysis conducted across multiple scan rates ({scan_rates_mv[0]:.0f} to {scan_rates_mv[-1]:.0f} mV/s) within an operating potential window of $\\Delta V = {delta_V:.2f}\\text{{ V}}$ reveals a maximum specific capacitance of **{cs_values[0]:.2f} F/g** at {scan_rates_mv[0]:.0f} mV/s, with **{retention:.1f}%** retention at higher rates.
 - The power-law kinetic analysis yields a mean $b$-value of **{mean_b:.3f}**, classifying the charge storage as **{mech_label}**. 
 - Utilizing Dunn's current separation method at {target_scan_rate_mv:.0f} mV/s demonstrates that **{mean_cap_pct:.1f}%** of the total stored charge is delivered via fast surface-controlled capacitive processes, while **{100.0 - mean_cap_pct:.1f}%** originates from diffusion-controlled intercalation/pseudocapacitive contributions.
 - These exceptional rate capabilities and surface-dominated kinetics are directly attributed to the synergistic effect of the crystalline framework ({xrd_summary if xrd_file else "phase purity"}) and accessible electroactive sites confirmed by structural analysis.
@@ -360,4 +360,4 @@ if uploaded_files:
         except Exception as e:
             st.error(f"Error processing files: {e}")
 else:
-    st.info("👈 Upload your multi-scan-rate CV files (and optional XRD/FTIR files) from the sidebar to begin.")
+    st.info("👈 Upload your multi-scan-rate CV files (and optional XRD/FTIR .asc files) from the sidebar to begin.")
