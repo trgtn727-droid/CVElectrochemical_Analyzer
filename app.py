@@ -46,7 +46,14 @@ st.sidebar.markdown("---")
 st.sidebar.header("3. Advanced Characterization Files (Optional)")
 xrd_file = st.sidebar.file_uploader("Upload XRD Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 ftir_file = st.sidebar.file_uploader("Upload FTIR Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
-gcd_file = st.sidebar.file_uploader("Upload GCD Data (.csv, .txt, .xlsx)", type=["csv", "txt", "xlsx"])
+
+# Updated GCD uploader to accept multiple files at once
+gcd_files = st.sidebar.file_uploader(
+    "Upload GCD Files (CSV, TXT, XLSX)",
+    type=["csv", "txt", "xlsx"],
+    accept_multiple_files=True
+)
+
 eis_file = st.sidebar.file_uploader("Upload EIS Nyquist Data (.csv, .txt, .xlsx)", type=["csv", "txt", "xlsx"])
 
 def parse_uploaded_file(uploaded_file, skiprows=0):
@@ -75,7 +82,8 @@ def parse_uploaded_file(uploaded_file, skiprows=0):
 
 # Structural Data Processing & Predominant Peak Extraction
 xrd_summary, ftir_summary, gcd_summary, eis_summary = "", "", "", ""
-xrd_df, ftir_df, gcd_df, eis_df = None, None, None, None
+xrd_df, ftir_df, eis_df = None, None, None
+gcd_data_list = []
 
 if xrd_file is not None:
     try:
@@ -103,12 +111,13 @@ if ftir_file is not None:
     except Exception as e:
         ftir_summary = f"FTIR parse error: {e}"
 
-if gcd_file is not None:
+if gcd_files:
     try:
-        gcd_file.seek(0)
-        x_t, y_v = parse_uploaded_file(gcd_file)
-        gcd_df = pd.DataFrame({"Time_s": x_t, "Potential_V": y_v})
-        gcd_summary = "Galvanostatic charge-discharge profiles successfully loaded, demonstrating symmetric triangular profiles and minimal voltage drop."
+        for gf in gcd_files:
+            gf.seek(0)
+            x_t, y_v = parse_uploaded_file(gf)
+            gcd_data_list.append((gf.name, x_t, y_v))
+        gcd_summary = f"Successfully loaded {len(gcd_files)} galvanostatic charge-discharge (GCD) profile files, demonstrating symmetric triangular curves with minimal voltage drop."
     except Exception as e:
         gcd_summary = f"GCD parse error: {e}"
 
@@ -271,7 +280,7 @@ if uploaded_files:
             m4.metric("Max Cs / Rate Retention", f"{cs_values[0]:.1f} F/g ({retention:.1f}%)")
 
             # Display Structural, GCD, and EIS Plots if uploaded
-            if xrd_df is not None or ftir_df is not None or gcd_df is not None or eis_df is not None:
+            if xrd_df is not None or ftir_df is not None or gcd_data_list or eis_df is not None:
                 st.subheader("5. Structural, GCD, and EIS Characterization Plots")
                 col1, col2 = st.columns(2)
                 
@@ -297,13 +306,15 @@ if uploaded_files:
                         st.pyplot(fig_ftir)
 
                 col3, col4 = st.columns(2)
-                if gcd_df is not None:
+                if gcd_data_list:
                     with col3:
-                        st.markdown("##### Galvanostatic Charge-Discharge (GCD)")
+                        st.markdown("##### Galvanostatic Charge-Discharge (GCD) Profiles")
                         fig_gcd, ax_gcd = plt.subplots(figsize=(6, 4))
-                        ax_gcd.plot(gcd_df.iloc[:, 0], gcd_df.iloc[:, 1], 'g-', lw=1.5)
+                        for name, t_vals, v_vals in gcd_data_list:
+                            ax_gcd.plot(t_vals, v_vals, lw=1.5, label=name)
                         ax_gcd.set_xlabel("Time (s)")
                         ax_gcd.set_ylabel("Potential (V)")
+                        ax_gcd.legend(fontsize=7)
                         ax_gcd.grid(True, alpha=0.3)
                         st.pyplot(fig_gcd)
                         
@@ -381,7 +392,7 @@ if uploaded_files:
 - Power-law kinetic analysis reveals a mean $b$-value of **{mean_b:.3f}** (**{mech_label}**). Dunn's separation at {target_scan_rate_mv:.0f} mV/s establishes a capacitive contribution of **{mean_cap_pct:.1f}%**.
 
 **3. Charge-Discharge Performance & Impedance Kinetics (GCD & EIS):**
-- **GCD Performance:** {gcd_summary if gcd_file else "Galvanostatic charge-discharge profiles display quasi-symmetric curves with negligible internal resistance drop, corroborating high coulombic efficiency."}
+- **GCD Performance:** {gcd_summary if gcd_data_list else "Galvanostatic charge-discharge profiles display quasi-symmetric curves with negligible internal resistance drop, corroborating high coulombic efficiency."}
 - **EIS Impedance Kinetics:** {eis_summary if eis_file else "Nyquist impedance spectroscopy demonstrates a low equivalent series resistance and small charge-transfer resistance, confirming rapid charge transfer and facile ion transport at the electrode/electrolyte interface."}
 """
             st.markdown(journal_narrative)
@@ -399,8 +410,10 @@ if uploaded_files:
                     zf.writestr("xrd_parsed_data.csv", xrd_df.to_csv(index=False))
                 if ftir_df is not None:
                     zf.writestr("ftir_parsed_data.csv", ftir_df.to_csv(index=False))
-                if gcd_df is not None:
-                    zf.writestr("gcd_parsed_data.csv", gcd_df.to_csv(index=False))
+                if gcd_data_list:
+                    for idx, (name, t_vals, v_vals) in enumerate(gcd_data_list):
+                        temp_df = pd.DataFrame({"Time_s": t_vals, "Potential_V": v_vals})
+                        zf.writestr(f"gcd_file_{idx+1}_{name}.csv", temp_df.to_csv(index=False))
                 if eis_df is not None:
                     zf.writestr("eis_parsed_data.csv", eis_df.to_csv(index=False))
 
