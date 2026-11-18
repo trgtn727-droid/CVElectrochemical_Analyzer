@@ -47,7 +47,7 @@ st.sidebar.header("3. Advanced Characterization Files (Optional)")
 xrd_file = st.sidebar.file_uploader("Upload XRD Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 ftir_file = st.sidebar.file_uploader("Upload FTIR Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 
-# Multi-file GCD uploader
+# Updated GCD uploader to accept multiple files at once
 gcd_files = st.sidebar.file_uploader(
     "Upload GCD Files (CSV, TXT, XLSX)",
     type=["csv", "txt", "xlsx"],
@@ -284,8 +284,6 @@ if uploaded_files:
                 st.subheader("5. Structural, GCD, and EIS Characterization Plots")
                 col1, col2 = st.columns(2)
                 
-                fig_xrd, fig_ftir, fig_gcd, fig_eis = None, None, None, None
-                
                 if xrd_df is not None:
                     with col1:
                         st.markdown("##### X-Ray Diffraction (XRD)")
@@ -333,7 +331,7 @@ if uploaded_files:
 
             # Electrochemical CV 4-panel figure
             st.subheader("6. CV Kinetics & Capacitance Analysis")
-            fig_cv, axes = plt.subplots(2, 2, figsize=(14, 10))
+            fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
             for j, (v_raw, i_raw) in enumerate(raw_data):
                 axes[0, 0].plot(v_raw, i_raw * 1000, label=f"{scan_rates_mv[j]:.0f} mV/s")
@@ -376,7 +374,7 @@ if uploaded_files:
             axes[1, 1].grid(True, alpha=0.3)
 
             plt.tight_layout()
-            st.pyplot(fig_cv)
+            st.pyplot(fig)
 
             st.subheader("7. Extracted Peaks & Specific Capacitance Summary")
             st.dataframe(summary_df, use_container_width=True)
@@ -399,52 +397,30 @@ if uploaded_files:
 """
             st.markdown(journal_narrative)
 
-            # Export ZIP Bundle with individual high-resolution figures and tables
+            # Export ZIP Bundle
             zip_buffer = io.BytesIO()
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, format="png", dpi=300)
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                # Save Tables
-                zf.writestr("tables/1_Peak_and_Capacitance_Summary.csv", summary_df.to_csv(index=False))
-                zf.writestr("tables/2_Potential_Resolved_Kinetics.csv", kinetics_df.to_csv(index=False))
-                
-                # Save Individual High-Res Figures (300 DPI)
-                cv_img = io.BytesIO()
-                fig_cv.savefig(cv_img, format="png", dpi=300)
-                zf.writestr("figures/CV_Kinetics_Analysis_Figure.png", cv_img.getvalue())
-                
-                if fig_xrd is not None:
-                    xrd_img = io.BytesIO()
-                    fig_xrd.savefig(xrd_img, format="png", dpi=300)
-                    zf.writestr("figures/XRD_Pattern_Figure.png", xrd_img.getvalue())
-                if fig_ftir is not None:
-                    ftir_img = io.BytesIO()
-                    fig_ftir.savefig(ftir_img, format="png", dpi=300)
-                    zf.writestr("figures/FTIR_Spectrum_Figure.png", ftir_img.getvalue())
-                if fig_gcd is not None:
-                    gcd_img = io.BytesIO()
-                    fig_gcd.savefig(gcd_img, format="png", dpi=300)
-                    zf.writestr("figures/GCD_Profiles_Figure.png", gcd_img.getvalue())
-                if fig_eis is not None:
-                    eis_img = io.BytesIO()
-                    fig_eis.savefig(eis_img, format="png", dpi=300)
-                    zf.writestr("figures/EIS_Nyquist_Figure.png", eis_img.getvalue())
-
-                # Save Written Narrative & Parsed Data Sources
-                zf.writestr("Journal_Results_and_Discussion.md", journal_narrative)
+                zf.writestr("1_Peak_and_Capacitance_Summary.csv", summary_df.to_csv(index=False))
+                zf.writestr("2_Potential_Resolved_Kinetics.csv", kinetics_df.to_csv(index=False))
+                zf.writestr("3_CV_Comprehensive_Analysis.png", img_buffer.getvalue())
+                zf.writestr("4_Journal_Results_and_Discussion.md", journal_narrative)
                 if xrd_df is not None:
-                    zf.writestr("raw_parsed_data/xrd_data.csv", xrd_df.to_csv(index=False))
+                    zf.writestr("xrd_parsed_data.csv", xrd_df.to_csv(index=False))
                 if ftir_df is not None:
-                    zf.writestr("raw_parsed_data/ftir_data.csv", ftir_df.to_csv(index=False))
+                    zf.writestr("ftir_parsed_data.csv", ftir_df.to_csv(index=False))
                 if gcd_data_list:
                     for idx, (name, t_vals, v_vals) in enumerate(gcd_data_list):
                         temp_df = pd.DataFrame({"Time_s": t_vals, "Potential_V": v_vals})
-                        zf.writestr(f"raw_parsed_data/gcd_file_{idx+1}_{name}.csv", temp_df.to_csv(index=False))
+                        zf.writestr(f"gcd_file_{idx+1}_{name}.csv", temp_df.to_csv(index=False))
                 if eis_df is not None:
-                    zf.writestr("raw_parsed_data/eis_data.csv", eis_df.to_csv(index=False))
+                    zf.writestr("eis_parsed_data.csv", eis_df.to_csv(index=False))
 
             st.download_button(
-                label="📥 Download Journal-Ready Package (Individual 300 DPI Graphs & Tables .zip)",
+                label="📥 Download Complete Multi-Technique Journal Bundle (.zip)",
                 data=zip_buffer.getvalue(),
-                file_name="Journal_Ready_Package.zip",
+                file_name="Complete_Journal_Analysis_Bundle.zip",
                 mime="application/zip"
             )
 
