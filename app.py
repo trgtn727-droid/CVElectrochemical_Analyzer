@@ -47,7 +47,6 @@ st.sidebar.header("3. Advanced Characterization Files (Optional)")
 xrd_file = st.sidebar.file_uploader("Upload XRD Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 ftir_file = st.sidebar.file_uploader("Upload FTIR Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 
-# Multi-file GCD uploader
 gcd_files = st.sidebar.file_uploader(
     "Upload GCD Files (CSV, TXT, XLSX)",
     type=["csv", "txt", "xlsx"],
@@ -80,6 +79,45 @@ def parse_uploaded_file(uploaded_file, skiprows=0):
     y_val = df.iloc[:, 1].values.astype(float)
     return x_val, y_val
 
+def parse_eis_file(uploaded_file, skiprows=0):
+    """Specialized robust parser for EIS Nyquist data to accurately map Z' and -Z''."""
+    name = uploaded_file.name.lower()
+    if name.endswith((".xls", ".xlsx")):
+        df = pd.read_excel(uploaded_file, skiprows=skiprows)
+    else:
+        df = pd.read_csv(uploaded_file, sep=None, engine="python", skiprows=skiprows, comment="#")
+    
+    df = df.dropna(axis=1, how="all")
+    
+    # Clean column names for keyword searching
+    col_map = {str(col).lower().strip(): col for col in df.columns}
+    
+    z_re_col, z_im_col = None, None
+    for c_lower, orig_col in col_map.items():
+        if any(k in c_lower for k in ["z'", "z_re", "real", "zre", "z (re)"]):
+            z_re_col = orig_col
+        elif any(k in c_lower for k in ["-z''", "z''", "imag", "zim", "z_im", "-z", "z (im)"]):
+            z_im_col = orig_col
+
+    # Fallback to positional columns if keywords aren't found in headers
+    if z_re_col is not None and z_im_col is not None:
+        z_re = pd.to_numeric(df[z_re_col], errors="coerce").values
+        z_im = pd.to_numeric(df[z_im_col], errors="coerce").values
+    else:
+    # If standard columns like Frequency(0), Z'(1), -Z''(2) are present, grab index 1 and 2 if available
+        numeric_df = df.select_dtypes(include=[np.number])
+        if numeric_df.shape[1] >= 3:
+            z_re = numeric_df.iloc[:, 1].values.astype(float)
+            z_im = np.abs(numeric_df.iloc[:, 2].values.astype(float))
+        elif numeric_df.shape[1] == 2:
+            z_re = numeric_df.iloc[:, 0].values.astype(float)
+            z_im = np.abs(numeric_df.iloc[:, 1].values.astype(float))
+        else:
+            raise ValueError("Could not automatically identify Real and Imaginary impedance columns in EIS file.")
+            
+    valid = ~(np.isnan(z_re) | np.isnan(z_im))
+    return z_re[valid], z_im[valid]
+
 # Structural Data Processing & Scherrer Crystallite Size / Microstrain Calculations
 xrd_summary, ftir_summary, gcd_summary, eis_summary = "", "", "", ""
 xrd_df, ftir_df, eis_df = None, None, None
@@ -97,23 +135,18 @@ if xrd_file is not None:
         peaks, properties = find_peaks(y_int, prominence=(np.max(y_int) - np.min(y_int)) * 0.1)
         if len(peaks) > 0:
             prominences = properties["prominences"]
-            max_idx = peaks[np.argmax(prominences)] # Most predominant peak
+            max_idx = peaks[np.argmax(prominences)]
             predominant_2theta_val = x_th[max_idx]
             
-            # Approximate FWHM estimation from peak width at half max height
             left_bases = properties["left_bases"][np.argmax(prominences)]
             right_bases = properties["right_bases"][np.argmax(prominences)]
             fwhm_deg = max(0.05, (x_th[right_bases] - x_th[left_bases]))
             fwhm_rad = np.radians(fwhm_deg)
             theta_rad = np.radians(predominant_2theta_val / 2.0)
             
-            # Scherrer Equation: D = (K * lambda) / (beta * cos(theta))
-            # K = 0.9, Cu K-alpha lambda = 0.15406 nm (1.5406 Angstroms)
             K_scherrer = 0.9
             lam = 0.15406  # nm
             avg_crystallite_size_nm = (K_scherrer * lam) / (fwhm_rad * np.cos(theta_rad))
-            
-            # Microstrain Equation: epsilon = beta / (4 * tan(theta))
             microstrain_val = fwhm_rad / (4.0 * np.tan(theta_rad))
             
             top_indices = peaks[np.argsort(prominences)[-3:]]
@@ -152,7 +185,7 @@ if gcd_files:
 if eis_file is not None:
     try:
         eis_file.seek(0)
-        z_re, z_im = parse_uploaded_file(eis_file)
+        z_re, z_im = parse_eis_file(eis_file)
         eis_df = pd.DataFrame({"Z_Real_Ohm": z_re, "Z_Imag_Ohm": z_im})
         eis_summary = "EIS Nyquist spectra successfully loaded, exhibiting a small semicircle in the high-frequency region and a steep Warburg slope."
     except Exception as e:
@@ -353,9 +386,9 @@ if uploaded_files:
                         st.markdown("##### Electrochemical Impedance Spectroscopy (Nyquist)")
                         fig_eis, ax_eis = plt.subplots(figsize=(6, 4))
                         ax_eis.plot(eis_df.iloc[:, 0], eis_df.iloc[:, 1], 'ko-', ms=4, lw=1)
-                        ax_eis.set_xlabel("Z' (Ohm)")
-                        ax_eis.set_ylabel("-Z'' (Ohm)")
-                        ax_eis.set_aspect('equal')
+                        ax_eis.set_xlabel("Z' ($\Omega$)", fontweight="bold")
+                        ax_eis.set_ylabel("-Z'' ($\Omega$)", fontweight="bold")
+                        ax_eis.set_aspect('equal', adjustable='box')
                         ax_eis.grid(True, alpha=0.3)
                         st.pyplot(fig_eis)
 
@@ -424,7 +457,7 @@ if uploaded_files:
 
 **3. Charge-Discharge Performance & Impedance Kinetics (GCD & EIS):**
 - **GCD Performance:** {gcd_summary if gcd_data_list else "Galvanostatic charge-discharge profiles display quasi-symmetric curves with negligible internal resistance drop, corroborating high coulombic efficiency."}
-- **EIS Impedance Kinetics:** {eis_summary if eis_file else "Nyquist impedance spectroscopy demonstrates low equivalent series resistance and small charge-transfer resistance, confirming rapid charge transfer at the interface."}
+- **EIS Impedance Kinetics:** {eis_summary if eis_file else "Nyquist impedance spectroscopy demonstrates low equivalent series resistance ($R_s$) and small charge-transfer resistance ($R_{ct}$), confirming rapid charge transfer at the electrode/electrolyte interface."}
 """
             st.markdown(journal_narrative)
 
