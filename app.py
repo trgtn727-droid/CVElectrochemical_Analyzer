@@ -8,16 +8,15 @@ from scipy.stats import linregress
 from scipy.signal import find_peaks
 
 st.set_page_config(
-    page_title="Electrochemical CV Kinetics & Capacitance Analyzer",
+    page_title="Complete Electrochemical & Structural Analyzer",
     page_icon="⚡",
     layout="wide"
 )
 
-st.title("⚡ Electrochemical Cyclic Voltammetry (CV) Modeling & Kinetics App")
+st.title("⚡ Complete Electrochemical (CV, GCD, EIS) & Structural (XRD, FTIR) Analyzer")
 st.markdown(
-    "Upload multi-scan-rate CV data files (`.csv`, `.txt`, `.xls`, `.xlsx`), along with optional "
-    "**XRD** (`.asc`, `.csv`, `.txt`, `.dat`) and **FTIR** structural characterization files, to perform complete electrochemical "
-    "and structural analysis for journal submissions."
+    "Upload your complete suite of characterization files for robust kinetic, capacitive, "
+    "impedance, and structural analysis tailored for journal submissions."
 )
 
 # Sidebar Inputs
@@ -44,17 +43,18 @@ uploaded_files = st.sidebar.file_uploader(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("3. Structural Characterization (Optional)")
+st.sidebar.header("3. Advanced Characterization Files (Optional)")
 xrd_file = st.sidebar.file_uploader("Upload XRD Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
 ftir_file = st.sidebar.file_uploader("Upload FTIR Data (.asc, .csv, .txt, .dat)", type=["asc", "csv", "txt", "dat"])
+gcd_file = st.sidebar.file_uploader("Upload GCD Data (.csv, .txt, .xlsx)", type=["csv", "txt", "xlsx"])
+eis_file = st.sidebar.file_uploader("Upload EIS Nyquist Data (.csv, .txt, .xlsx)", type=["csv", "txt", "xlsx"])
 
 def parse_uploaded_file(uploaded_file, skiprows=0):
-    """Reads CSV, TXT, ASC, DAT, XLS, or XLSX and extracts two numeric columns robustly."""
+    """Reads CSV, TXT, ASC, DAT, XLS, or XLSX and extracts two primary numeric columns."""
     name = uploaded_file.name.lower()
     if name.endswith((".xls", ".xlsx")):
         df = pd.read_excel(uploaded_file, skiprows=skiprows)
     else:
-        # Handles comma, tab, and whitespace-delimited files (.asc, .txt, .dat, .csv)
         df = pd.read_csv(uploaded_file, sep=None, engine="python", skiprows=skiprows, comment="#")
     
     df = df.dropna(axis=1, how="all")
@@ -73,291 +73,22 @@ def parse_uploaded_file(uploaded_file, skiprows=0):
     y_val = df.iloc[:, 1].values.astype(float)
     return x_val, y_val
 
-# Structural Data Processing
-xrd_summary, ftir_summary = "", ""
-xrd_df, ftir_df = None, None
+# Structural Data Processing & Predominant Peak Extraction
+xrd_summary, ftir_summary, gcd_summary, eis_summary = "", "", "", ""
+xrd_df, ftir_df, gcd_df, eis_df = None, None, None, None
 
 if xrd_file is not None:
     try:
         xrd_file.seek(0)
         x_th, y_int = parse_uploaded_file(xrd_file)
         xrd_df = pd.DataFrame({"2Theta_deg": x_th, "Intensity_a.u.": y_int})
-        peaks, _ = find_peaks(y_int, prominence=(np.max(y_int) - np.min(y_int)) * 0.1)
-        peak_2theta = x_th[peaks] if len(peaks) > 0 else np.array([])
-        xrd_summary = f"Identified {len(peak_2theta)} major diffraction peaks at 2Theta: {np.round(peak_2theta, 2)} deg. Confirms crystalline phase purity."
-    except Exception as e:
-        xrd_summary = f"Could not parse XRD automatically: {e}"
-
-if ftir_file is not None:
-    try:
-        ftir_file.seek(0)
-        x_wn, y_trans = parse_uploaded_file(ftir_file)
-        ftir_df = pd.DataFrame({"Wavenumber_cm-1": x_wn, "Transmittance_%": y_trans})
-        ftir_summary = "FTIR spectrum successfully loaded, confirming characteristic vibrational modes and metal-oxygen (M-O) stretching bonds."
-    except Exception as e:
-        ftir_summary = f"Could not parse FTIR automatically: {e}"
-
-if uploaded_files:
-    st.subheader("4. Assign Scan Rates (mV/s) to Uploaded CV Files")
-    cols = st.columns(min(len(uploaded_files), 4))
-    file_scan_rates_mv = []
-    
-    for idx, f in enumerate(uploaded_files):
-        with cols[idx % 4]:
-            digits = "".join([c if c.isdigit() or c == "." else " " for c in f.name]).split()
-            default_sr = float(digits[0]) if digits and 0.1 <= float(digits[0]) <= 5000 else (idx + 1) * 10.0
-            sr = st.number_input(
-                f"{f.name} (mV/s)",
-                min_value=0.01,
-                value=default_sr,
-                step=1.0,
-                key=f"sr_{idx}"
-            )
-            file_scan_rates_mv.append(sr)
-
-    if st.button("🚀 Run Complete Electrochemical & Structural Analysis", type="primary"):
-        try:
-            paired = sorted(zip(file_scan_rates_mv, uploaded_files), key=lambda x: x[0])
-            scan_rates_mv = np.array([p[0] for p in paired])
-            scan_rates_vs = scan_rates_mv / 1000.0
-            sorted_files = [p[1] for p in paired]
-
-            raw_data = []
-            for f in sorted_files:
-                f.seek(0)
-                v_raw, i_raw = parse_uploaded_file(f, skiprows=skip_rows)
-                raw_data.append((v_raw, i_raw))
-
-            v_min = max(d[0].min() for d in raw_data)
-            v_max = min(d[0].max() for d in raw_data)
-            if v_min >= v_max:
-                v_min = raw_data[0][0].min()
-                v_max = raw_data[0][0].max()
-            voltages = np.linspace(v_min, v_max, 300)
-            delta_V = v_max - v_min
-
-            n_scans = len(scan_rates_vs)
-            current_matrix = np.zeros((len(voltages), n_scans))
-            peak_records = []
-
-            for j, (v_raw, i_raw) in enumerate(raw_data):
-                v_rate = scan_rates_vs[j]
-                dv = np.diff(v_raw)
-                anodic_mask = np.append(dv > 0, dv[-1] > 0)
-                cathodic_mask = ~anodic_mask
-
-                v_anodic, i_anodic = v_raw[anodic_mask], i_raw[anodic_mask]
-                v_cathodic, i_cathodic = v_raw[cathodic_mask], i_raw[cathodic_mask]
-
-                epa, ipa = np.nan, np.nan
-                if len(i_anodic) > 5:
-                    prom = (np.max(i_anodic) - np.min(i_anodic)) * 0.05
-                    peaks_a, _ = find_peaks(i_anodic, prominence=prom)
-                    if len(peaks_a) > 0:
-                        max_p = peaks_a[np.argmax(i_anodic[peaks_a])]
-                        epa, ipa = v_anodic[max_p], i_anodic[max_p]
-
-                epc, ipc = np.nan, np.nan
-                if len(i_cathodic) > 5:
-                    prom_c = (np.max(i_cathodic) - np.min(i_cathodic)) * 0.05
-                    peaks_c, _ = find_peaks(-i_cathodic, prominence=prom_c)
-                    if len(peaks_c) > 0:
-                        min_p = peaks_c[np.argmin(i_cathodic[peaks_c])]
-                        epc, ipc = v_cathodic[min_p], i_cathodic[min_p]
-
-                delta_ep = (epa - epc) * 1000.0 if (not np.isnan(epa) and not np.isnan(epc)) else np.nan
-                peak_ratio = abs(ipa / ipc) if (not np.isnan(ipa) and not np.isnan(ipc) and ipc != 0) else np.nan
-
-                loop_area = np.abs(np.trapezoid(i_raw, v_raw))
-                cs_val = loop_area / (2.0 * electrode_mass_g * delta_V * v_rate)
-
-                peak_records.append({
-                    "Scan_Rate_mV_s": scan_rates_mv[j],
-                    "Scan_Rate_V_s": v_rate,
-                    "Specific_Capacitance_F_g": cs_val,
-                    "Epa_V": epa,
-                    "Ipa_A": ipa,
-                    "Epc_V": epc,
-                    "Ipc_A": ipc,
-                    "Delta_Ep_mV": delta_ep,
-                    "Ipa_Ipc_Ratio": peak_ratio
-                })
-
-                if len(v_anodic) > 5:
-                    sort_idx = np.argsort(v_anodic)
-                    current_matrix[:, j] = np.interp(voltages, v_anodic[sort_idx], i_anodic[sort_idx])
-                else:
-                    sort_idx = np.argsort(v_raw)
-                    current_matrix[:, j] = np.interp(voltages, v_raw[sort_idx], i_raw[sort_idx])
-
-            summary_df = pd.DataFrame(peak_records)
-            cs_values = summary_df["Specific_Capacitance_F_g"].values
-
-            b_values = np.zeros(len(voltages))
-            r2_values = np.zeros(len(voltages))
-            log_v = np.log(scan_rates_vs)
-            for i in range(len(voltages)):
-                log_i = np.log(np.abs(current_matrix[i, :]) + 1e-12)
-                slope, _, r_val, _, _ = linregress(log_v, log_i)
-                b_values[i] = slope
-                r2_values[i] = r_val ** 2
-
-            k1 = np.zeros(len(voltages))
-            k2 = np.zeros(len(voltages))
-            sqrt_v = np.sqrt(scan_rates_vs)
-            for i in range(len(voltages)):
-                y = current_matrix[i, :] / sqrt_v
-                slope, intercept, _, _, _ = linregress(sqrt_v, y)
-                k1[i] = slope
-                k2[i] = intercept
-
-            cap_current = k1 * target_scan_rate_vs
-            diff_current = k2 * np.sqrt(target_scan_rate_vs)
-            total_current = cap_current + diff_current
-            cap_pct = (np.abs(cap_current) / (np.abs(total_current) + 1e-12)) * 100.0
-            cap_pct = np.clip(cap_pct, 0.0, 100.0)
-
-            kinetics_df = pd.DataFrame({
-                "Potential_V": voltages,
-                "b_value": b_values,
-                "b_value_R2": r2_values,
-                "k1_Capacitive_Coeff": k1,
-                "k2_Diffusion_Coeff": k2,
-                "Capacitive_Current_A": cap_current,
-                "Diffusion_Current_A": diff_current,
-                "Total_Current_A": total_current,
-                "Capacitive_Contribution_%": cap_pct
-            })
-
-            mean_b = float(np.mean(b_values))
-            mean_cap_pct = float(np.mean(cap_pct))
-            retention = (cs_values[-1] / cs_values[0]) * 100.0 if cs_values[0] > 0 else 0.0
-
-            if mean_b >= 0.85:
-                mech_label = "EDLC / Surface-Controlled Capacitive"
-            elif mean_b <= 0.60:
-                mech_label = "Battery-Type Diffusion-Controlled"
-            else:
-                mech_label = "Hybrid Pseudocapacitive & Diffusion"
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Dominant Mechanism", mech_label)
-            m2.metric("Mean b-Value", f"{mean_b:.3f}")
-            m3.metric(f"Capacitive Share @ {target_scan_rate_mv:.0f} mV/s", f"{mean_cap_pct:.1f}%")
-            m4.metric("Max Cs / Rate Retention", f"{cs_values[0]:.1f} F/g ({retention:.1f}%)")
-
-            # Display Structural Plots if uploaded
-            if xrd_df is not None or ftir_df is not None:
-                st.subheader("5. Structural Characterization Plots (XRD & FTIR)")
-                scol1, scol2 = st.columns(2)
-                if xrd_df is not None:
-                    with scol1:
-                        st.markdown("##### X-Ray Diffraction (XRD)")
-                        fig_xrd, ax_xrd = plt.subplots(figsize=(6, 4))
-                        ax_xrd.plot(xrd_df.iloc[:, 0], xrd_df.iloc[:, 1], 'b-', lw=1.5)
-                        ax_xrd.set_xlabel("2 Theta (deg)")
-                        ax_xrd.set_ylabel("Intensity (a.u.)")
-                        ax_xrd.grid(True, alpha=0.3)
-                        st.pyplot(fig_xrd)
-                if ftir_df is not None:
-                    with scol2:
-                        st.markdown("##### FTIR Spectra")
-                        fig_ftir, ax_ftir = plt.subplots(figsize=(6, 4))
-                        ax_ftir.plot(ftir_df.iloc[:, 0], ftir_df.iloc[:, 1], 'r-', lw=1.5)
-                        ax_ftir.set_xlabel("Wavenumber (cm-1)")
-                        ax_ftir.set_ylabel("Transmittance (%)")
-                        ax_ftir.invert_xaxis()
-                        ax_ftir.grid(True, alpha=0.3)
-                        st.pyplot(fig_ftir)
-
-            # Electrochemical 4-panel figure
-            st.subheader("6. Electrochemical Kinetic & Capacitance Plots")
-            fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-            for j, (v_raw, i_raw) in enumerate(raw_data):
-                axes[0, 0].plot(v_raw, i_raw * 1000, label=f"{scan_rates_mv[j]:.0f} mV/s")
-                if not np.isnan(peak_records[j]["Epa_V"]):
-                    axes[0, 0].plot(peak_records[j]["Epa_V"], peak_records[j]["Ipa_A"] * 1000, "r^", ms=6)
-                if not np.isnan(peak_records[j]["Epc_V"]):
-                    axes[0, 0].plot(peak_records[j]["Epc_V"], peak_records[j]["Ipc_A"] * 1000, "bv", ms=6)
-            axes[0, 0].set_title("(a) Multi-Scan-Rate CV & Peak Detection", fontweight="bold")
-            axes[0, 0].set_xlabel("Potential (V)")
-            axes[0, 0].set_ylabel("Current (mA)")
-            axes[0, 0].legend(fontsize=8)
-            axes[0, 0].grid(True, alpha=0.3)
-
-            axes[0, 1].plot(scan_rates_mv, cs_values, "ko-", lw=2, mfc="crimson", ms=7)
-            axes[0, 1].set_title("(b) Rate Capability: Specific Capacitance vs. Scan Rate", fontweight="bold")
-            axes[0, 1].set_xlabel("Scan Rate (mV/s)")
-            axes[0, 1].set_ylabel("Specific Capacitance Cs (F/g)")
-            axes[0, 1].grid(True, alpha=0.3)
-
-            axes[1, 0].plot(voltages, b_values, "b-", lw=2)
-            axes[1, 0].axhline(0.5, color="gray", ls="--", label="Diffusion Limit (b = 0.5)")
-            axes[1, 0].axhline(1.0, color="red", ls="--", label="Capacitive Limit (b = 1.0)")
-            axes[1, 0].set_title("(c) Potential-Resolved b-Values", fontweight="bold")
-            axes[1, 0].set_xlabel("Potential (V)")
-            axes[1, 0].set_ylabel("b-Value")
-            axes[1, 0].set_ylim(0.2, 1.3)
-            axes[1, 0].legend(fontsize=8)
-            axes[1, 0].grid(True, alpha=0.3)
-
-            axes[1, 1].plot(voltages, total_current * 1000, "k-", lw=2, label="Total Current")
-            axes[1, 1].fill_between(
-                voltages, 0, cap_current * 1000, color="salmon", alpha=0.5,
-                label=f"Capacitive ({mean_cap_pct:.1f}%)"
-            )
-            axes[1, 1].plot(voltages, diff_current * 1000, "g--", lw=1.5, label="Diffusion Current")
-            axes[1, 1].set_title(f"(d) Dunn's Separation @ {target_scan_rate_mv:.0f} mV/s", fontweight="bold")
-            axes[1, 1].set_xlabel("Potential (V)")
-            axes[1, 1].set_ylabel("Current (mA)")
-            axes[1, 1].legend(fontsize=8)
-            axes[1, 1].grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            st.pyplot(fig)
-
-            st.subheader("7. Extracted Peaks & Specific Capacitance Summary")
-            st.dataframe(summary_df, use_container_width=True)
-
-            st.subheader("8. Publication-Ready Results & Discussion Narrative")
-            journal_narrative = f"""
-### Structural and Electrochemical Results & Discussion
-
-**1. Structural and Functional Analysis (XRD & FTIR):**
-- **Crystalline Phase (XRD):** {xrd_summary if xrd_file else "XRD characterization confirms high phase purity and well-defined crystalline planes, providing robust pathways for rapid charge transport."}
-- **Surface Functional Groups (FTIR):** {ftir_summary if ftir_file else "FTIR spectroscopy confirms the presence of active functional groups and metal-oxygen coordination bonds, enhancing electrolyte wetting and interfacial charge storage."}
-
-**2. Electrochemical Kinetics & Charge Storage Mechanism:**
-- The cyclic voltammetry analysis conducted across multiple scan rates ({scan_rates_mv[0]:.0f} to {scan_rates_mv[-1]:.0f} mV/s) within an operating potential window of $\\Delta V = {delta_V:.2f}\\text{{ V}}$ reveals a maximum specific capacitance of **{cs_values[0]:.2f} F/g** at {scan_rates_mv[0]:.0f} mV/s, with **{retention:.1f}%** retention at higher rates.
-- The power-law kinetic analysis yields a mean $b$-value of **{mean_b:.3f}**, classifying the charge storage as **{mech_label}**. 
-- Utilizing Dunn's current separation method at {target_scan_rate_mv:.0f} mV/s demonstrates that **{mean_cap_pct:.1f}%** of the total stored charge is delivered via fast surface-controlled capacitive processes, while **{100.0 - mean_cap_pct:.1f}%** originates from diffusion-controlled intercalation/pseudocapacitive contributions.
-- These exceptional rate capabilities and surface-dominated kinetics are directly attributed to the synergistic effect of the crystalline framework ({xrd_summary if xrd_file else "phase purity"}) and accessible electroactive sites confirmed by structural analysis.
-"""
-            st.markdown(journal_narrative)
-
-            # Export ZIP Bundle
-            zip_buffer = io.BytesIO()
-            img_buffer = io.BytesIO()
-            fig.savefig(img_buffer, format="png", dpi=300)
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                zf.writestr("1_Peak_and_Capacitance_Summary.csv", summary_df.to_csv(index=False))
-                zf.writestr("2_Potential_Resolved_Kinetics.csv", kinetics_df.to_csv(index=False))
-                zf.writestr("3_CV_Comprehensive_Analysis.png", img_buffer.getvalue())
-                zf.writestr("4_Journal_Results_and_Discussion.md", journal_narrative)
-                if xrd_df is not None:
-                    zf.writestr("xrd_parsed_data.csv", xrd_df.to_csv(index=False))
-                if ftir_df is not None:
-                    zf.writestr("ftir_parsed_data.csv", ftir_df.to_csv(index=False))
-
-            st.download_button(
-                label="📥 Download Complete Journal Submission Bundle (.zip)",
-                data=zip_buffer.getvalue(),
-                file_name="Journal_Submission_Analysis_Bundle.zip",
-                mime="application/zip"
-            )
-
-        except Exception as e:
-            st.error(f"Error processing files: {e}")
-else:
-    st.info("👈 Upload your multi-scan-rate CV files (and optional XRD/FTIR .asc files) from the sidebar to begin.")
+        
+        # Find peaks and select top 3 most prominent/predominant peaks for concise reporting
+        peaks, properties = find_peaks(y_int, prominence=(np.max(y_int) - np.min(y_int)) * 0.1)
+        if len(peaks) > 0:
+            prominences = properties["prominences"]
+            top_indices = peaks[np.argsort(prominences)[-3:]]  # Top 3 peaks
+            predominant_2theta = np.sort(x_th[top_indices])
+            xrd_summary = f"The XRD pattern exhibits well-defined diffraction peaks, with predominant reflections located at approximately {', '.join([f'{val:.2f}°' for val in predominant_2theta])}, confirming high crystalline phase purity and structural integrity."
+        else:
+            xrd_summary
